@@ -217,9 +217,10 @@ sub request
   if (!defined($self->get_req_header("Accept"))) {
     $self->add_req_header("Accept", "*/*");
   }
-
-  if ($method eq 'POST') {
-    $self->http_write(*FH, "Content-Type: application/x-www-form-urlencoded$CRLF");
+  my $content_type =
+    $self->get_req_header("Content-Type") || $method eq 'POST' && 'application/x-www-form-urlencoded';
+  if ($content_type) {
+    $self->http_write(*FH, "Content-Type: $content_type$CRLF");
   }
   
   # Purge a couple others
@@ -236,7 +237,11 @@ sub request
   my $content_length;
   if (defined($self->{content}))
   {
-    $content_length = length($self->{content});
+    if (!ref $self->{content}) {
+      $content_length = length($self->{content});
+    } elsif (ref $self->{content} eq 'HASH' && defined $self->{content}->{'file'}) {
+      $content_length = -s $self->{content}->{'file'};
+    }
   }
   if (defined($callback_func)) {
     my $ncontent_length = &$callback_func($self, "content-length", undef, @$callback_params);
@@ -269,9 +274,25 @@ sub request
   } 
   
   # Output content, if any
-  if (!$content_out && defined($self->{content}))
-  {
-    $self->http_write(*FH, $self->{content});
+  if (!$content_out && defined($self->{content})) {
+    if (!ref $self->{content}) {
+      $self->http_write(*FH, $self->{content});
+    } elsif (
+        ref $self->{content} eq 'HASH' &&
+        defined $self->{content}->{'file'} &&
+        -r $self->{content}->{'file'}
+    ) {
+      local *FILE;
+      my $data;
+
+      if (open(FILE, '<', $self->{content}->{'file'})) {
+        binmode(FILE);
+        while (read(FILE, $data, 1024)) {
+          $self->http_write(*FH, $data);
+        }
+        close(FILE);
+      }
+    }
   }
   
   if (defined($callback_func)) {
